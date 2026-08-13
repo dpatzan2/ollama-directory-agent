@@ -1,0 +1,16 @@
+{
+  "_comment": "Simulates an external company-enrichment API. Your enrich_company tool should read from this file. A company may have zero, one, or multiple candidate results.",
+  "Cobalt Marine": [
+    { "domain": "cobaltmarine.nl", "confidence": 0.97, "source": "business_registry" }
+  ],
+  "Nordwind Analytica": [
+    { "domain": "nordwindanalytica.es", "confidence": 0.94, "source": "business_registry" }
+  ],
+  "Pampa Solar": [
+    { "domain": "pampasolar.ar", "confidence": 0.91, "source": "business_registry" }
+  ],
+  "Helios Data": [
+    { "domain": "heliosdata.com", "confidence": 0.72, "source": "web_search" },
+    { "domain": "helios-data.ai", "confidence": 0.68, "source": "web_search" }
+  ]
+}
