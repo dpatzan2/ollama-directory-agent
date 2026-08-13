@@ -30,10 +30,12 @@ ENRICHMENT = json.loads((KIT / "enrichment_api.json").read_text())
 def search_directory(query: str) -> dict:
     """Search the small supplied directory by company, person, title, industry, city, or domain."""
     normalized = query.strip().lower()
-    exact_companies = [company for company in COMPANIES if company["company_name"].lower() == normalized]
+    exact_companies = [company for company in COMPANIES if company["company_name"].lower() in normalized]
     if exact_companies:
         names = {company["company_name"] for company in exact_companies}
-        return {"companies": exact_companies, "people": [person for person in PEOPLE if person["company_name"] in names]}
+        people = [person for person in PEOPLE if person["company_name"] in names]
+        title_matches = [person for person in people if person["title"].lower() in normalized]
+        return {"companies": exact_companies, "people": title_matches or people}
     words = {word.lower() for word in query.replace("?", "").split() if len(word) > 1}
 
     def matches(row: dict[str, str]) -> bool:
@@ -42,7 +44,7 @@ def search_directory(query: str) -> dict:
 
     companies = [company for company in COMPANIES if matches(company)]
     people = [person for person in PEOPLE if matches(person)]
-    if "healthcare" in words:
+    if "healthcare" in normalized:
         healthcare = {company["company_name"] for company in COMPANIES if company["industry"] == "Healthcare"}
         companies = [company for company in COMPANIES if company["company_name"] in healthcare]
         people = [person for person in PEOPLE if person["company_name"] in healthcare]
@@ -52,6 +54,27 @@ def search_directory(query: str) -> dict:
 def enrich_company(company_name: str) -> dict:
     """Read simulated enrichment candidates; never calls an external service."""
     return {"company_name": company_name, "candidates": ENRICHMENT.get(company_name, [])}
+
+
+def render_evidence(question: str, results: list[dict]) -> str:
+    """Render exact tool records instead of trusting a small local model to paraphrase them."""
+    companies, people, candidates = [], [], []
+    for result in results:
+        companies.extend(result.get("companies", []))
+        people.extend(result.get("people", []))
+        candidates.extend(result.get("candidates", []))
+    lines = ["Grounded answer (only retrieved records):"]
+    if companies:
+        lines.append("Companies: " + "; ".join(f"{row['company_name']} ({row['industry']}, {row['city']}, domain: {row['domain'] or 'not listed'})" for row in companies))
+    if people:
+        lines.append("People: " + "; ".join(f"{row['full_name']} — {row['title']} at {row['company_name']}" for row in people))
+    if candidates:
+        lines.append("Enrichment candidates: " + "; ".join(f"{row['domain']} (confidence {row['confidence']}, {row['source']})" for row in candidates))
+    if len(lines) == 1:
+        lines.append("No matching records or enrichment candidates were found.")
+    if "revenue" in question.lower():
+        lines.append("The retrieved data does not contain a revenue field.")
+    return "\n".join(lines)
 
 
 TOOLS = [
@@ -86,16 +109,23 @@ def call_ollama(messages: list[dict]) -> dict:
 
 def answer(question: str, trace: bool = True) -> str:
     messages = [
-        {"role": "system", "content": "You answer only from tool results. First use search_directory for every question. After seeing its result, decide whether enrich_company is needed: use enrichment only when the requested domain is missing. Do not infer facts. For people, keep each name, title, and company paired exactly as returned; do not combine titles from different rows. If evidence is missing, say you do not have that information. If enrichment returns multiple candidates, list all candidates and say the data is ambiguous. Do not invent domains, revenue, or people."},
+        {"role": "system", "content": "You answer only from tool results. First use search_directory for every question. After seeing its result, decide whether enrich_company is needed: use enrichment only when the requested domain is missing. Answer only the requested fact, with no extra claims. Do not infer facts. For people, keep each name, title, and company paired exactly as returned; do not combine titles from different rows. If evidence is missing, say you do not have that information. If enrichment returns multiple candidates, list all candidates and say the data is ambiguous. Do not invent domains, revenue, or people."},
         {"role": "user", "content": question},
     ]
     tools = {"search_directory": search_directory, "enrich_company": enrich_company}
+    evidence = []
+    asked_for_tool = False
     for _ in range(MAX_ITERATIONS):
         message = call_ollama(messages)
         messages.append(message)
         calls = message.get("tool_calls") or []
         if not calls:
-            return message.get("content", "I could not answer from the directory.")
+            if not asked_for_tool:
+                messages.append({"role": "user", "content": "Before answering, inspect the directory with search_directory. Choose the tool call yourself."})
+                asked_for_tool = True
+                continue
+            return render_evidence(question, evidence)
+        asked_for_tool = True
         for call in calls:
             name = call["function"]["name"]
             arguments = call["function"].get("arguments", {})
@@ -103,6 +133,7 @@ def answer(question: str, trace: bool = True) -> str:
                 result = {"error": f"Unknown tool: {name}"}
             else:
                 result = tools[name](**arguments)
+            evidence.append(result)
             if trace:
                 print(f"TOOL {name}({json.dumps(arguments)}) -> {json.dumps(result)}")
             messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result)})
