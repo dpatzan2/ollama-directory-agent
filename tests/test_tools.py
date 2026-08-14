@@ -1,6 +1,6 @@
 import unittest
 
-from agent import enrich_company, search_directory
+from agent import enrich_company, render_evidence, search_directory
 
 
 class DirectoryToolTests(unittest.TestCase):
@@ -19,3 +19,8 @@ class DirectoryToolTests(unittest.TestCase):
 
     def test_enrichment_reports_no_match(self):
         self.assertEqual(enrich_company("Sable Security")["candidates"], [])
+
+    def test_renderer_keeps_people_titles_paired_with_companies(self):
+        text = render_evidence("Healthcare people", [search_directory("Healthcare")])
+        self.assertIn("Lena Kovac — Board Member at Verdant Health", text)
+        self.assertIn("Lena Kovac — CFO at Aurora BioLabs", text)
